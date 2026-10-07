@@ -1,0 +1,390 @@
+@model FuelFlowQueueLab.Models.ViewModels.CalculatorViewModel
+@using FuelFlowQueueLab.Models.Enums
+@using FuelFlowQueueLab.Services
+
+@{
+    ViewData["Title"] = "Queueing Calculator";
+}
+
+<div class="fade-in-up">
+    <!-- Header -->
+    <div class="mb-4">
+        <h2 class="fw-bold text-navy-900 d-flex align-items-center gap-2">
+            <i class="bi bi-calculator text-amber"></i> Queueing Model Calculator &mdash; Petrol Pump
+        </h2>
+        <p class="text-muted">Select a queueing model &rarr; Enter arrival/service inputs &rarr; Choose distributions (where applicable) &rarr; Calculate</p>
+    </div>
+
+    <!-- Model Selector Pills -->
+    <div class="d-flex flex-wrap gap-2 mb-4">
+        @foreach (var m in Enum.GetValues<QueueingModel>())
+        {
+            <div class="model-pill px-4 py-2 @(Model.Model == m ? "active" : "")" data-model="@m">
+                @QueueingCalculatorService.GetModelDisplayName(m)
+            </div>
+        }
+    </div>
+
+    <form asp-action="Index" method="post" id="calculatorForm">
+        @Html.AntiForgeryToken()
+        <input type="hidden" asp-for="Model" id="Model" />
+
+        <!-- CORE INPUTS -->
+        <div class="card glass-card top-accent-navy mb-4 border-0">
+            <div class="card-body">
+                <h5 class="fw-bold mb-3 d-flex align-items-center gap-2">
+                    <i class="bi bi-sliders text-muted"></i> Core Inputs
+                </h5>
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <label asp-for="TimeUnit" class="form-label small fw-bold text-uppercase text-muted">Time Unit</label>
+                        <select asp-for="TimeUnit" asp-items="Html.GetEnumSelectList<TimeUnit>()" class="form-select"></select>
+                        <div class="form-text small">All times/rates below are interpreted in this unit &mdash; no manual conversion needed.</div>
+                    </div>
+                    <div class="col-md-6">
+                        <label asp-for="NumberOfCustomers" class="form-label small fw-bold text-uppercase text-muted">Number of Customers</label>
+                        <input asp-for="NumberOfCustomers" class="form-control" type="number" min="1" />
+                        <span asp-validation-for="NumberOfCustomers" class="text-danger small"></span>
+                        <div class="form-text small">For record only; steady-state formulas assume infinite population.</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ARRIVAL & SERVICE & PREVIEW -->
+        <div class="card glass-card border-0 mb-4">
+            <div class="card-body">
+                <div class="row g-4">
+                    <!-- Inputs -->
+                    <div class="col-lg-7 border-end-lg pe-lg-4">
+                        
+                        <!-- Arrival -->
+                        <div class="mb-4">
+                            <h6 class="fw-bold mb-3 d-flex align-items-center gap-2">
+                                <i class="bi bi-box-arrow-in-right text-amber"></i> Arrival Input
+                            </h6>
+                            <div class="d-flex gap-4 mb-2">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" asp-for="ArrivalInputMode" value="MeanTime" id="arrMean">
+                                    <label class="form-check-label small" for="arrMean">Mean Interarrival Time</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" asp-for="ArrivalInputMode" value="Rate" id="arrRate">
+                                    <label class="form-check-label small" for="arrRate">Arrival Rate (&lambda;)</label>
+                                </div>
+                            </div>
+                            <input asp-for="ArrivalValue" class="form-control" type="number" step="any" min="0.0001" />
+                            <span asp-validation-for="ArrivalValue" class="text-danger small"></span>
+                        </div>
+
+                        <!-- Service -->
+                        <div class="mb-4">
+                            <h6 class="fw-bold mb-3 d-flex align-items-center gap-2">
+                                <i class="bi bi-tools text-amber"></i> Service Input
+                            </h6>
+                            <div class="d-flex gap-4 mb-2">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" asp-for="ServiceInputMode" value="MeanTime" id="srvMean">
+                                    <label class="form-check-label small" for="srvMean">Mean Service Time</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" asp-for="ServiceInputMode" value="Rate" id="srvRate">
+                                    <label class="form-check-label small" for="srvRate">Service Rate (&mu;)</label>
+                                </div>
+                            </div>
+                            <input asp-for="ServiceValue" class="form-control" type="number" step="any" min="0.0001" />
+                            <span asp-validation-for="ServiceValue" class="text-danger small"></span>
+                        </div>
+
+                        <!-- Servers -->
+                        <div id="servers-group" class="mb-2" style="display:none;">
+                            <h6 class="fw-bold mb-2 d-flex align-items-center gap-2">
+                                <i class="bi bi-people text-amber"></i> Number of Servers (s)
+                            </h6>
+                            <input asp-for="Servers" class="form-control" type="number" min="1" max="100" />
+                            <span asp-validation-for="Servers" class="text-danger small"></span>
+                            <div class="form-text small">Active pumps/nozzles (or agents/channels).</div>
+                        </div>
+                    </div>
+
+                    <!-- Live Preview Panel -->
+                    <div class="col-lg-5">
+                        <div class="live-preview-box p-4 h-100 d-flex flex-column justify-content-center">
+                            <h6 class="fw-bold mb-4 text-muted text-uppercase tracking-wider fs-7">Live Preview</h6>
+                            
+                            <div class="d-flex justify-content-between align-items-center mb-3 pb-2 border-bottom">
+                                <span class="text-secondary">&lambda; (Arrival Rate)</span>
+                                <div>
+                                    <span class="metric-value text-amber" id="preview-lambda">0.0000</span>
+                                    <span class="text-muted small ms-1">/ unit</span>
+                                </div>
+                            </div>
+                            
+                            <div class="d-flex justify-content-between align-items-center mb-3 pb-2 border-bottom">
+                                <span class="text-secondary">&mu; (Service Rate)</span>
+                                <div>
+                                    <span class="metric-value text-amber" id="preview-mu">0.0000</span>
+                                    <span class="text-muted small ms-1">/ unit</span>
+                                </div>
+                            </div>
+                            
+                            <div id="rho-container" class="d-flex justify-content-between align-items-center p-3 rounded bg-white border">
+                                <span class="fw-bold">&rho; (Utilization)</span>
+                                <div>
+                                    <span class="metric-value" id="preview-rho">0.0000</span>
+                                </div>
+                            </div>
+                            <div class="text-center mt-2 small text-muted">Utilization &rho; must be &lt; 1</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- DISTRIBUTIONS -->
+        <div class="card glass-card border-0 mb-4">
+            <div class="card-body">
+                <h5 class="fw-bold mb-4 d-flex align-items-center gap-2">
+                    <i class="bi bi-bar-chart-steps text-muted"></i> Distribution Selection
+                </h5>
+
+                <div class="row g-4">
+                    <!-- Arrival Dist -->
+                    <div class="col-md-6 border-end-md">
+                        <h6 class="fw-bold mb-2">Arrival Distribution</h6>
+                        <div id="arrival-dist-badge" class="badge bg-success bg-opacity-10 text-success p-2 mb-3 w-100 text-start border border-success border-opacity-25 fs-6">
+                            <i class="bi bi-lock-fill me-1"></i> Poisson (fixed — Markovian arrivals)
+                        </div>
+                        <select asp-for="ArrivalDistribution" class="form-select mb-3" style="display:none;">
+                            <option value="Exponential">Exponential (Markovian, Ca=1)</option>
+                            <option value="Uniform">Uniform</option>
+                            <option value="Normal">Normal</option>
+                        </select>
+
+                        <div id="arrival-uniform-params" style="display:none;" class="p-3 bg-light rounded border mb-2">
+                            <div class="row g-2">
+                                <div class="col-6">
+                                    <label class="form-label small text-muted">Min (a)</label>
+                                    <input asp-for="ArrivalMin" class="form-control form-control-sm" type="number" step="any" />
+                                    <span asp-validation-for="ArrivalMin" class="text-danger small"></span>
+                                </div>
+                                <div class="col-6">
+                                    <label class="form-label small text-muted">Max (b)</label>
+                                    <input asp-for="ArrivalMax" class="form-control form-control-sm" type="number" step="any" />
+                                    <span asp-validation-for="ArrivalMax" class="text-danger small"></span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="arrival-normal-params" style="display:none;" class="p-3 bg-light rounded border mb-2">
+                            <div class="d-flex gap-3 mb-2">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" asp-for="UseVarianceForArrival" value="False" id="arrStdDev">
+                                    <label class="form-check-label small" for="arrStdDev">Std Dev (&sigma;)</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" asp-for="UseVarianceForArrival" value="True" id="arrVar">
+                                    <label class="form-check-label small" for="arrVar">Variance (&sigma;&sup2;)</label>
+                                </div>
+                            </div>
+                            <div class="row g-2">
+                                <div class="col-6">
+                                    <input asp-for="ArrivalStdDev" class="form-control form-control-sm" type="number" step="any" placeholder="&sigma;" />
+                                    <span asp-validation-for="ArrivalStdDev" class="text-danger small"></span>
+                                </div>
+                                <div class="col-6">
+                                    <input asp-for="ArrivalVariance" class="form-control form-control-sm" type="number" step="any" placeholder="&sigma;&sup2;" />
+                                    <span asp-validation-for="ArrivalVariance" class="text-danger small"></span>
+                                </div>
+                            </div>
+                            <div class="form-text small">Mean is taken from core inputs.</div>
+                        </div>
+                    </div>
+
+                    <!-- Service Dist -->
+                    <div class="col-md-6">
+                        <h6 class="fw-bold mb-2">Service Distribution</h6>
+                        <div id="service-dist-badge" class="badge bg-primary bg-opacity-10 text-primary p-2 mb-3 w-100 text-start border border-primary border-opacity-25 fs-6">
+                            <i class="bi bi-lock-fill me-1"></i> Exponential (fixed — Markovian service)
+                        </div>
+                        <select asp-for="ServiceDistribution" class="form-select mb-3" style="display:none;">
+                            <option value="Exponential">Exponential (Markovian, Cs=1)</option>
+                            <option value="Uniform">Uniform</option>
+                            <option value="Normal">Normal</option>
+                        </select>
+
+                        <div id="service-uniform-params" style="display:none;" class="p-3 bg-light rounded border mb-2">
+                            <div class="row g-2">
+                                <div class="col-6">
+                                    <label class="form-label small text-muted">Min (a)</label>
+                                    <input asp-for="ServiceMin" class="form-control form-control-sm" type="number" step="any" />
+                                    <span asp-validation-for="ServiceMin" class="text-danger small"></span>
+                                </div>
+                                <div class="col-6">
+                                    <label class="form-label small text-muted">Max (b)</label>
+                                    <input asp-for="ServiceMax" class="form-control form-control-sm" type="number" step="any" />
+                                    <span asp-validation-for="ServiceMax" class="text-danger small"></span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="service-normal-params" style="display:none;" class="p-3 bg-light rounded border mb-2">
+                            <div class="d-flex gap-3 mb-2">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" asp-for="UseVarianceForService" value="False" id="srvStdDev">
+                                    <label class="form-check-label small" for="srvStdDev">Std Dev (&sigma;)</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" asp-for="UseVarianceForService" value="True" id="srvVar">
+                                    <label class="form-check-label small" for="srvVar">Variance (&sigma;&sup2;)</label>
+                                </div>
+                            </div>
+                            <div class="row g-2">
+                                <div class="col-6">
+                                    <input asp-for="ServiceStdDev" class="form-control form-control-sm" type="number" step="any" placeholder="&sigma;" />
+                                    <span asp-validation-for="ServiceStdDev" class="text-danger small"></span>
+                                </div>
+                                <div class="col-6">
+                                    <input asp-for="ServiceVariance" class="form-control form-control-sm" type="number" step="any" placeholder="&sigma;&sup2;" />
+                                    <span asp-validation-for="ServiceVariance" class="text-danger small"></span>
+                                </div>
+                            </div>
+                            <div class="form-text small">Mean is taken from core inputs.</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Buttons -->
+        <div class="d-flex gap-3 align-items-center mb-5">
+            <button type="submit" class="btn btn-primary px-4 py-2 fw-bold shadow-sm">
+                <i class="bi bi-play-fill me-1"></i> Calculate
+            </button>
+            <a href="~/Simulation/Index?model=@Model.Model" class="btn btn-light border px-4 py-2 text-muted hover-shadow">
+                <i class="bi bi-arrow-counterclockwise me-1"></i> Reset
+            </a>
+            <a href="~/Simulator/Index" class="btn btn-link text-decoration-none text-navy ms-auto">
+                Go to Simulator (DES) <i class="bi bi-arrow-right"></i>
+            </a>
+        </div>
+    </form>
+
+    <!-- RESULTS SECTION -->
+    @if (Model.Result != null)
+    {
+        <hr class="my-5" />
+        
+        <h3 class="fw-bold mb-4 d-flex align-items-center gap-2">
+            <i class="bi bi-graph-up text-amber"></i> Results: @Model.Result.ModelName
+        </h3>
+
+        @if (!Model.Result.IsStable)
+        {
+            <div class="alert alert-danger shadow-sm border-0 d-flex align-items-center gap-3 p-4 mb-4">
+                <i class="bi bi-exclamation-triangle-fill fs-1 text-danger"></i>
+                <div>
+                    <h5 class="fw-bold mb-1">System is Unstable</h5>
+                    <p class="mb-0">@Model.Result.ErrorMessage</p>
+                </div>
+            </div>
+        }
+        else
+        {
+            <!-- Metric Cards -->
+            <div class="row g-3 mb-4">
+                <div class="col-6 col-md-3">
+                    <div class="card glass-card top-accent h-100 border-0 p-3 text-center">
+                        <div class="text-muted small fw-bold text-uppercase mb-2">Avg in Queue (Lq)</div>
+                        <div class="fs-3 fw-bold text-navy-900">@Model.Result.Lq.ToString("F4")</div>
+                        <div class="small text-muted">customers</div>
+                    </div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="card glass-card top-accent h-100 border-0 p-3 text-center">
+                        <div class="text-muted small fw-bold text-uppercase mb-2">Avg in System (L)</div>
+                        <div class="fs-3 fw-bold text-navy-900">@Model.Result.L.ToString("F4")</div>
+                        <div class="small text-muted">customers</div>
+                    </div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="card glass-card top-accent h-100 border-0 p-3 text-center">
+                        <div class="text-muted small fw-bold text-uppercase mb-2">Wait in Queue (Wq)</div>
+                        <div class="fs-3 fw-bold text-navy-900">@Model.Result.Wq.ToString("F4")</div>
+                        <div class="small text-muted">@Model.Result.TimeUnitLabel</div>
+                    </div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="card glass-card top-accent h-100 border-0 p-3 text-center">
+                        <div class="text-muted small fw-bold text-uppercase mb-2">Time in System (W)</div>
+                        <div class="fs-3 fw-bold text-navy-900">@Model.Result.W.ToString("F4")</div>
+                        <div class="small text-muted">@Model.Result.TimeUnitLabel</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Parameters Table -->
+            <div class="card glass-card border-0 mb-4">
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-custom table-hover mb-0">
+                            <tbody>
+                                <tr>
+                                    <th class="ps-4" style="width: 30%">Arrival Rate (&lambda;)</th>
+                                    <td>@Model.Result.Lambda.ToString("F4") / @Model.Result.TimeUnitLabel</td>
+                                    <th style="width: 30%">Service Rate (&mu;)</th>
+                                    <td>@Model.Result.Mu.ToString("F4") / @Model.Result.TimeUnitLabel</td>
+                                </tr>
+                                <tr>
+                                    <th class="ps-4">Number of Servers (s)</th>
+                                    <td>@Model.Result.Servers</td>
+                                    <th>Utilization (&rho;)</th>
+                                    <td>
+                                        <span class="badge bg-primary bg-opacity-10 text-primary border border-primary border-opacity-25">
+                                            @Model.Result.Rho.ToString("F4") (@Model.Result.UtilizationPercent.ToString("F2")%)
+                                        </span>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <th class="ps-4">Arrival Variance (Ca&sup2;)</th>
+                                    <td>@Model.Result.CaSquared.ToString("F4")</td>
+                                    <th>Service Variance (Cs&sup2;)</th>
+                                    <td>@Model.Result.CsSquared.ToString("F4")</td>
+                                </tr>
+                                <tr>
+                                    <th class="ps-4">Prob. Empty (P&or;)</th>
+                                    <td>@Model.Result.P0.ToString("F4")</td>
+                                    <th>Prob. Busy (Idle)</th>
+                                    <td>@((1 - Model.Result.IdleProbability).ToString("F4")) (@Model.Result.IdleProbability.ToString("F4"))</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Step by Step Formulas -->
+            <div class="card bg-navy text-white border-0 shadow-lg mb-5">
+                <div class="card-header border-bottom border-secondary p-3">
+                    <h5 class="fw-bold mb-0 d-flex align-items-center gap-2">
+                        <i class="bi bi-journal-code text-amber"></i> Formula Derivation Steps
+                    </h5>
+                </div>
+                <div class="card-body p-4 bg-navy-800 rounded-bottom">
+                    <pre class="mb-0 text-white font-monospace" style="white-space: pre-wrap; font-size: 0.9rem;">@Model.Result.FormulaSteps</pre>
+                </div>
+            </div>
+        }
+    }
+    else if(Context.Request.Method == "GET")
+    {
+        <div class="alert alert-warning bg-amber-100 text-amber-600 border-amber-400 d-flex align-items-center gap-2 py-2 mt-2">
+            <i class="bi bi-info-circle-fill"></i> Select a model &rarr; Enter values &rarr; Click <strong>Calculate</strong>
+        </div>
+    }
+</div>
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+    <script src="~/js/calculator.js"></script>
+}
